@@ -1,0 +1,6 @@
+.venv
+venv
+_pycache_
+.env
+log_file_test_01.bin
+
