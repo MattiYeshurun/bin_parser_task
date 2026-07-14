@@ -1,16 +1,35 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, Tuple
+import mmap
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 from src.config.constants import MESSAGE_HEADER
 from src.models.bin_messages import Message, MessageFormat
 from src.parsing_methods.shared import parse_bytes_to_dict
+
+
+def scan_message_offsets(file_path: Path, formats: Dict[int, MessageFormat]) -> List[Tuple[int, int]]:
+    """Scans a BIN file and returns a list of (offset, type_id) for every valid message."""
+    offsets = []
+    with file_path.open('rb') as f:
+        with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mapped:
+            position = mapped.find(MESSAGE_HEADER)
+            while position != -1 and position < len(mapped) - 2:
+                type_id = mapped[position + 2]
+                fmt_obj = formats.get(type_id)
+                if fmt_obj:
+                    offsets.append((position, type_id))
+                    position += fmt_obj.length
+                else:
+                    position += 1
+                position = mapped.find(MESSAGE_HEADER, position)
+    return offsets
 
 def decode_message(
     buffer: Any,
     offset: int,
     type_id: int,
     formats: Dict[int, MessageFormat],
-    timebase_info: Optional[Tuple[float, int, bool]] = None,
 ) -> Optional[Message]:
     """Decodes a single message from the buffer using the unified parsing core."""
     
@@ -21,7 +40,7 @@ def decode_message(
     frame = MESSAGE_HEADER + bytes([type_id]) + bytes(buffer[offset : offset + message_format.length - 3])
     
     result = parse_bytes_to_dict(
-        frame, 0, len(frame), formats, wanted_names=[message_format.name], timebase_info=timebase_info, limit=1
+        frame, 0, len(frame), formats, wanted_names=[message_format.name]
     )
     
     messages = result.get(message_format.name, [])

@@ -5,7 +5,7 @@ import struct
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from src.config.constants import FMT_MESSAGE_SIZE, FMT_TYPE_ID, MESSAGE_HEADER
+from src.config.constants import BINARY_Z_FIELDS, FMT_MESSAGE_SIZE, FMT_PAYLOAD_STRUCT, FMT_TYPE_ID, MESSAGE_HEADER
 from src.config.logging_config import get_logger
 from src.models.bin_messages import MessageFormat
 
@@ -67,6 +67,13 @@ def create_message_format(
         columns=[null_term(c) for c in raw_columns.split(b",") if c.strip()],
     )
     struct_obj, multipliers, string_indices, array_indices = build_struct(fmt_obj.format_string)
+    
+    # Filter out columns that represent raw binary data (configured in BINARY_Z_FIELDS)
+    # so they remain bytes and are not decoded as null-terminated strings.
+    for col_idx in list(string_indices):
+        if col_idx < len(fmt_obj.columns) and (name, fmt_obj.columns[col_idx]) in BINARY_Z_FIELDS:
+            string_indices.remove(col_idx)
+
     fmt_obj.struct_obj = struct_obj
     fmt_obj.string_indices = string_indices
     fmt_obj.array_indices = array_indices
@@ -97,7 +104,7 @@ def load_message_formats(file_path: Path) -> Dict[int, MessageFormat]:
             while position != -1:
                 payload = data[position + 3 : position + FMT_MESSAGE_SIZE]
                 try:
-                    type_id, length, raw_name, raw_format, raw_columns = struct.unpack("<BB4s16s64s", payload)
+                    type_id, length, raw_name, raw_format, raw_columns = FMT_PAYLOAD_STRUCT.unpack(payload)
                     if type_id not in formats:
                         fmt_obj = create_message_format(type_id, length, raw_name, raw_format, raw_columns)
                         if fmt_obj.name:

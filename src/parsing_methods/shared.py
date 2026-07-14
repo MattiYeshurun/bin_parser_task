@@ -4,7 +4,6 @@ import struct
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from src.business_logic.format_bank import load_message_formats
 from src.config.constants import MESSAGE_HEADER
 from src.config.logging_config import get_logger
 from src.models.bin_messages import MessageFormat
@@ -35,89 +34,122 @@ def parse_bytes_to_dict(
     wanted_names: Optional[List[str] | Set[str]] = None,
 ) -> Dict[str, List[Tuple[Any, ...]]]:
 
-    result: Dict[str, List[Tuple[Any, ...]]] = {fmt.name: [] for fmt in formats.values()}
     wanted_set = set(wanted_names) if wanted_names is not None else None
 
-    # Cache local variables and references to reduce global lookup overhead in the hot loop
-    struct_error = struct.error
-    array_class = array.array
-    mapped_len = len(mapped)
+    # ── Pre-computation: format lookup table (list[256] instead of dict.get) ──
+    format_table: list = [None] * 256
+    name_to_fmt: Dict[str, MessageFormat] = {}
+    for tid, fmt in formats.items():
+        format_table[tid] = fmt
+        name_to_fmt[fmt.name] = fmt
 
-    aligned = False
-    position = mapped.find(MESSAGE_HEADER, start_offset)
-    while position != -1 and position < end_offset:  # TODO check this loop
+    # ── Pre-computation: wanted type IDs for multi-type targeted search ──
+    wanted_ids: Optional[Set[int]] = None
+    if wanted_set is not None:
+        wanted_ids = {tid for tid, fmt in formats.items() if fmt.name in wanted_set}
+
+    # Targeted search optimization for single wanted message type
+    search_header = MESSAGE_HEADER
+    if wanted_ids is not None and len(wanted_ids) == 1:
+        search_header = MESSAGE_HEADER + bytes([next(iter(wanted_ids))])
+
+    # ── Cache local references for hot loop performance ──
+    mapped_len = len(mapped)
+    mapped_find = mapped.find
+    _MESSAGE_HEADER = MESSAGE_HEADER
+
+    raw_buffers: Dict[str, bytearray] = {}
+    msg_counts: Dict[str, int] = {}
+
+    position = mapped_find(search_header, start_offset)
+    while position != -1 and position < end_offset:
         if position + 3 > mapped_len:
             break
 
-        if mapped[position : position + 2] == MESSAGE_HEADER:
+        if mapped[position : position + 2] == _MESSAGE_HEADER:
             type_id = mapped[position + 2]
-            message_format = formats.get(type_id)
-            if message_format is not None:
-                aligned = True
-                end_msg = position + message_format.length
+            fmt = format_table[type_id]
+            if fmt is not None:
+                msg_length = fmt.length
+                end_msg = position + msg_length
                 if end_msg > mapped_len:
                     break
 
-                if wanted_set is None or message_format.name in wanted_set:
-                    s_obj = message_format.struct_obj
+                if wanted_ids is None or type_id in wanted_ids:
+                    s_obj = fmt.struct_obj
                     if s_obj is not None:
-                        try:
-                            raw = s_obj.unpack_from(mapped, position + 3)
-                        except struct_error as e:
-                            logger.error(f"Failed to unpack message '{message_format.name}' at offset {position}: {e}")
-                            position = mapped.find(MESSAGE_HEADER, position + 1)
-                            continue
+                        name = fmt.name
+                        stride = s_obj.size
+                        if name in raw_buffers:
+                            raw_buffers[name].extend(mapped[position + 3 : position + 3 + stride])
+                            msg_counts[name] += 1
+                        else:
+                            raw_buffers[name] = bytearray(mapped[position + 3 : position + 3 + stride])
+                            msg_counts[name] = 1
                     else:
                         logger.warning(
-                            f"Message format '{message_format.name}' (type_id {type_id}) has no struct object defined"
+                            f"Message format '{fmt.name}' (type_id {type_id}) has no struct object defined"
                         )
-                        position = mapped.find(MESSAGE_HEADER, position + 1)
+                        position = mapped_find(_MESSAGE_HEADER, position + 1)
                         continue
 
-                    name = message_format.name
-                    if message_format.needs_processing:
-                        values = list(raw)
-
-                        # String decoding (File Data column is pre-filtered out of string_indices in format_bank)
-                        string_indices = message_format.string_indices
-                        if string_indices:
-                            for idx in string_indices:
-                                values[idx] = values[idx].split(b"\0", 1)[0].decode("ISO-8859-1")
-
-                        # Scaling
-                        for idx, mul in message_format.scaled_indices:
-                            values[idx] *= mul
-
-                        # Array fields
-                        array_indices = message_format.array_indices
-                        if array_indices:
-                            for idx in array_indices:
-                                a = array_class("h")
-                                a.frombytes(values[idx])
-                                values[idx] = a.tolist()
-
-                        msg_tuple = tuple(values)
-                    else:
-                        msg_tuple = raw
-
-                    result[name].append(msg_tuple)
-
-                # Advance position
-                position = end_msg
+                # Advance position past this message
+                position = mapped_find(search_header, end_msg)
                 continue
-            else:
-                if aligned:
-                    logger.warning(
-                        f"Found MESSAGE_HEADER at offset {position} but type_id {type_id} is unregistered/unknown"
-                    )
 
-        position = mapped.find(MESSAGE_HEADER, position + 1)
+        position = mapped_find(search_header, position + 1)
+
+    array_class = array.array
+    result: Dict[str, List[Tuple[Any, ...]]] = {}
+
+    for name, buf in raw_buffers.items():
+        fmt = name_to_fmt[name]
+        s_obj = fmt.struct_obj
+
+        if not fmt.needs_processing:
+            # Fast path: C-level batch unpack via iter_unpack
+            result[name] = list(s_obj.iter_unpack(buf))
+        else:
+            # Slow path: unpack + per-message processing
+            string_indices = fmt.string_indices
+            scaled_indices = fmt.scaled_indices
+            array_indices = fmt.array_indices
+            rows = []
+            rows_append = rows.append
+            for raw in s_obj.iter_unpack(buf):
+                values = list(raw)
+
+                # String decoding (FILE Data column pre-filtered in format_bank)
+                if string_indices:
+                    for idx in string_indices:
+                        values[idx] = values[idx].partition(b"\0")[0].decode("ISO-8859-1")
+
+                # Scaling
+                for idx, mul in scaled_indices:
+                    values[idx] *= mul
+
+                # Array fields
+                if array_indices:
+                    for idx in array_indices:
+                        a = array_class("h")
+                        a.frombytes(values[idx])
+                        values[idx] = a.tolist()
+
+                rows_append(tuple(values))
+            result[name] = rows
+
+    # Add empty lists for message types not found in this chunk
+    for fmt in formats.values():
+        if wanted_set is None or fmt.name in wanted_set:
+            if fmt.name not in result:
+                result[fmt.name] = []
 
     return result
 
 
 def multiprocessing_byte_worker(args: Tuple[Path, int, int, Optional[Set[str]]]) -> Dict[str, List[Tuple[Any, ...]]]:
     """Multiprocessing entry point for byte range worker."""
+    from src.business_logic.format_bank import load_message_formats
     file_path, start_offset, end_offset, wanted_names = args
     formats = load_message_formats(file_path)
     with file_path.open("rb") as f:

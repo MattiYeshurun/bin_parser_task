@@ -2,12 +2,14 @@ import struct
 from pathlib import Path
 
 MESSAGE_HEADER = b"\xa3\x95"
-MSG_HEADER_BYTES = MESSAGE_HEADER
 FMT_TYPE_ID = 0x80
 FMT_MESSAGE_SIZE = 89
 FMT_PAYLOAD_STRUCT = struct.Struct("<BB4s16s64s")
 HEADER_SIZE = 3
-HEADER_SKIP_BYTES_COUNT = HEADER_SIZE
 GPS_COORDINATE_SCALE = 10_000_000.0
 DEFAULT_LOG_FILE = Path("log_file_test_01.bin")
-DEFAULT_LOG_FILE_PATH = DEFAULT_LOG_FILE
+
+# Message fields that use format char 'Z' (64-byte) but contain raw binary data,
+# not null-terminated strings. These are excluded from string decoding.
+BINARY_Z_FIELDS = {("FILE", "Data")}
+

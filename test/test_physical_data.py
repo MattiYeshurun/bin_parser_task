@@ -1,7 +1,6 @@
 import sys
 import math
 import json
-import mmap
 from pathlib import Path
 from pymavlink import mavutil
 
@@ -10,24 +9,8 @@ sys.path.append(str(Path(__file__).resolve().parent.parent))
 sys.path.append(str(Path(__file__).resolve().parent))
 
 from src.business_logic.ardupilot_bin_parser import BinParser
-from test_helpers import decode_message
+from test_helpers import decode_message, scan_message_offsets
 from src.config.constants import MESSAGE_HEADER
-
-def scan_message_offsets(file_path, formats):
-    offsets = []
-    with file_path.open('rb') as f:
-        with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mapped:
-            position = mapped.find(MESSAGE_HEADER)
-            while position != -1 and position < len(mapped) - 2:
-                type_id = mapped[position + 2]
-                fmt_obj = formats.get(type_id)
-                if fmt_obj:
-                    offsets.append((position, type_id))
-                    position += fmt_obj.length
-                else:
-                    position += 1
-                position = mapped.find(MESSAGE_HEADER, position)
-    return offsets
 
 def clean_dict_values(d: dict) -> dict:
     clean = {}
