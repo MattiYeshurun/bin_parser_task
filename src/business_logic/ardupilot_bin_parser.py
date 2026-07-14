@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from src.business_logic.format_bank import load_message_formats
-from src.config.constants import MESSAGE_HEADER
+from src.config.constants import MAX_CHUNK_SIZE_BYTES, MESSAGE_HEADER
 from src.config.logging_config import get_logger
 from src.config.worker_config import get_optimal_num_workers
 from src.models.bin_messages import Message, MessageFormat
@@ -50,11 +50,11 @@ class BinParser:
                 num_workers = get_optimal_num_workers(self.file_path)
 
             file_size = self.file_path.stat().st_size
-            chunk_size = math.ceil(file_size / num_workers)
+            chunk_size = min(math.ceil(file_size / num_workers), MAX_CHUNK_SIZE_BYTES)
+            num_chunks = math.ceil(file_size / chunk_size)
             chunk_args = [
                 (self.file_path, i * chunk_size, min((i + 1) * chunk_size, file_size), wanted_names)
-                for i in range(num_workers)
-                if i * chunk_size < file_size
+                for i in range(num_chunks)
             ]
             executor: Executor
             if parsing_mode == "threads":

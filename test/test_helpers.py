@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import mmap
 from pathlib import Path
+import sys
 from typing import Any, Dict, List, Optional, Tuple
+sys.path.append(str(Path(__file__).resolve().parent.parent))
 from src.config.constants import MESSAGE_HEADER
 from src.models.bin_messages import Message, MessageFormat
 from src.parsing_methods.shared import parse_bytes_to_dict
@@ -17,7 +19,7 @@ def scan_message_offsets(file_path: Path, formats: Dict[int, MessageFormat]) -> 
             while position != -1 and position < len(mapped) - 2:
                 type_id = mapped[position + 2]
                 fmt_obj = formats.get(type_id)
-                if fmt_obj:
+                if fmt_obj and fmt_obj.length > 0:
                     offsets.append((position, type_id))
                     position += fmt_obj.length
                 else:

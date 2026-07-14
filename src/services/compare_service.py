@@ -18,10 +18,16 @@ def benchmark_pymavlink(file_path: Path) -> BenchmarkResult:
     start = time.perf_counter()
     connection = mavutil.mavlink_connection(str(file_path))
     count = 0
-    while connection.recv_match() is not None:
+    msgs = []
+    
+    while True:
+        msg = connection.recv_match()
+        if msg is None:
+            break
+            
         count += 1
+        msgs.append(msg.to_dict()) 
     return BenchmarkResult("pymavlink (Baseline)", count, time.perf_counter() - start)
-
 
 def measure_parse_time(
     name: str, file_path: Path, parsing_mode: str, num_workers: Optional[int] = None

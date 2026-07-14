@@ -13,3 +13,7 @@ DEFAULT_LOG_FILE = Path("log_file_test_01.bin")
 # not null-terminated strings. These are excluded from string decoding.
 BINARY_Z_FIELDS = {("FILE", "Data")}
 
+# Maximum chunk size in bytes processed by a single worker to prevent memory OOM on large files.
+MAX_CHUNK_SIZE_BYTES = 20 * 1024 * 1024
+
+
