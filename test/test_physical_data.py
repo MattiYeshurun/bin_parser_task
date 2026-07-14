@@ -1,16 +1,35 @@
 import sys
 import math
 import json
+import mmap
 from pathlib import Path
-
-# הוספת תיקיית השורש ל-sys.path לצורך ייבוא תקין
-sys.path.append(str(Path(__file__).resolve().parent.parent))
-
 from pymavlink import mavutil
-from src.services.bin_parser_service import BinParserService
+
+# Add project root to sys.path
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+sys.path.append(str(Path(__file__).resolve().parent))
+
+from src.business_logic.ardupilot_bin_parser import BinParser
+from test_helpers import decode_message
+from src.config.constants import MESSAGE_HEADER
+
+def scan_message_offsets(file_path, formats):
+    offsets = []
+    with file_path.open('rb') as f:
+        with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mapped:
+            position = mapped.find(MESSAGE_HEADER)
+            while position != -1 and position < len(mapped) - 2:
+                type_id = mapped[position + 2]
+                fmt_obj = formats.get(type_id)
+                if fmt_obj:
+                    offsets.append((position, type_id))
+                    position += fmt_obj.length
+                else:
+                    position += 1
+                position = mapped.find(MESSAGE_HEADER, position)
+    return offsets
 
 def clean_dict_values(d: dict) -> dict:
-    """מעבדת מילון ומנקה בייטים ו-nan לצורך תצוגה והשוואה נקייה"""
     clean = {}
     for k, v in d.items():
         if isinstance(v, float) and math.isnan(v):
@@ -24,10 +43,8 @@ def clean_dict_values(d: dict) -> dict:
     return clean
 
 def check_dictionaries_match(d1: dict, d2: dict) -> bool:
-    """מבצעת השוואה לוגית עמוקה בין שני מילוני השדות (כולל הגנה על נקודה צפה)"""
     if set(d1.keys()) != set(d2.keys()):
         return False
-        
     for key, v1 in d1.items():
         v2 = d2.get(key)
         if isinstance(v1, (int, float)) and isinstance(v2, (int, float)):
@@ -39,20 +56,19 @@ def check_dictionaries_match(d1: dict, d2: dict) -> bool:
 
 def main():
     file_path = Path(__file__).resolve().parent.parent / "log_file_test_01.bin"
-    
     if not file_path.exists():
         print(f"Error: {file_path.name} not found.")
         return
 
     print("\n" + "=" * 175)
-    print(" 🔍 VERIFYING 1:1 EQUIVALENCE: OFFICIAL PYMAVLINK VS YOUR PARSER")
+    print(" VERIFYING 1:1 EQUIVALENCE: OFFICIAL PYMAVLINK VS YOUR PARSER")
     print("=" * 175)
 
-    parser = BinParserService(file_path)
+    parser = BinParser(file_path)
     with file_path.open('rb') as f:
         file_bytes = f.read()
         
-    offsets = parser.scan_message_offsets()
+    offsets = scan_message_offsets(file_path, parser.formats)
     view = memoryview(file_bytes)
     connection = mavutil.mavlink_connection(str(file_path))
 
@@ -60,7 +76,6 @@ def main():
     mismatches = 0
     checked_messages = 0
 
-    # מבנה טבלה מורחב הכולל עמודת סטטוס ייעודית לאימות 1:1
     print("+" + "-" * 173 + "+")
     print(f"| {'Line #':<6} | {'Msg Type':<8} | {'[1/2] Official pymavlink Dictionary':<65} | {'[2/2] Your Project Dictionary':<65} | {'1:1 Match':<7} |")
     print("+" + "=" * 173 + "+")
@@ -76,34 +91,28 @@ def main():
         if not fmt_obj or fmt_obj.name in ['FMT', 'FMTU', 'UNIT', 'MULT']: 
             continue
             
-        payload = view[pos + 3 : pos + fmt_obj.length]
-        custom_msg = parser.decode_message(payload, type_id)
+        custom_msg = decode_message(view, pos + 3, type_id, parser.formats)
         if not custom_msg: continue
 
         checked_messages += 1
         
-        # 1. עיבוד מילון pymavlink
         pymavlink_fields = pymavlink_msg.to_dict()
         pymavlink_fields.pop('mavpackettype', None)
         p_clean = clean_dict_values(pymavlink_fields)
         p_str = json.dumps(p_clean, default=str)
 
-        # 2. עיבוד מילון המפענח שלך
         c_clean = clean_dict_values(custom_msg.fields)
         c_str = json.dumps(c_clean, default=str)
         
-        # 3. אימות והצלבה בזמן אמת
         is_match = check_dictionaries_match(p_clean, c_clean)
         status_label = "MATCH" if is_match else "FAIL"
         
         if not is_match:
             mismatches += 1
 
-        # חיתוך אסטטי לעמודות כדי שלא ישברו את קווי הטבלה בטרמינל
         if len(p_str) > 65: p_str = p_str[:62] + "..."
         if len(c_str) > 65: c_str = c_str[:62] + "..."
 
-        # הדפסת השורה עם האימות החי
         print(f"| {msg_idx:<6} | {custom_msg.name:<8} | {p_str:<65} | {c_str:<65} | {status_label:<7} |")
 
         if msg_idx % 15 == 0 and msg_idx > 0:
@@ -116,9 +125,9 @@ def main():
     print("=" * 175)
     
     if mismatches == 0:
-        print(" 🎉 VERIFICATION SUCCESS: 1:1 PERFECT DATA MATCH PROVEN ACROSS ALL ROWS!")
+        print(" [OK] VERIFICATION SUCCESS: 1:1 PERFECT DATA MATCH PROVEN ACROSS ALL ROWS!")
     else:
-        print(" ⚠️ WARNING: Discrepancies found in decoding data values.")
+        print(" [!!] WARNING: Discrepancies found in decoding data values.")
     print("=" * 175 + "\n")
 
 if __name__ == "__main__":

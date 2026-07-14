@@ -1,109 +1,96 @@
-import math
+import os
 import time
 from pathlib import Path
-from typing import Dict, List
-import matplotlib.pyplot as plt
+from typing import Dict, List, Optional
 
+from pymavlink import mavutil
+
+from src.business_logic.ardupilot_bin_parser import BinParser
 from src.config.logging_config import get_logger
+from src.config.worker_config import get_optimal_num_workers
 from src.models.bin_messages import BenchmarkResult
-from src.services.bin_parser_service import BinParserService
-from src.services.benchmark_service import (
-    parse_sequential_fast,
-    parse_threaded_fast,
-    parse_multiprocess_fast,
-    parse_async_fast,
-    benchmark_pymavlink
-)
 
 logger = get_logger(__name__)
 
-def generate_and_save_chart(all_results: Dict[str, List[BenchmarkResult]], output_path: str = "benchmark_results.png") -> None:
-    methods = []
-    avg_times = []
 
-    for method_name, results in all_results.items():
-        if not results: 
-            continue
-        methods.append(method_name.split(" (")[0])
-        times = [r.elapsed_seconds for r in results]
-        avg_times.append(sum(times) / len(times))
+def benchmark_pymavlink(file_path: Path) -> BenchmarkResult:
+    """Measures parsing time of pymavlink (Baseline)."""
+    start = time.perf_counter()
+    connection = mavutil.mavlink_connection(str(file_path))
+    count = 0
+    while connection.recv_match() is not None:
+        count += 1
+    return BenchmarkResult("pymavlink (Baseline)", count, time.perf_counter() - start)
 
-    plt.figure(figsize=(10, 6))
-    colors = ['#dc3545', '#ffc107', '#17a2b8', '#28a745', '#007bff']
-    bars = plt.bar(methods, avg_times, color=colors[:len(methods)], edgecolor='black', width=0.5)
-    
-    for bar in bars:
-        height = bar.get_height()
-        plt.text(bar.get_x() + bar.get_width()/2., height + (max(avg_times) * 0.01), 
-                 f'{height:.3f}s', ha='center', va='bottom', fontweight='bold', fontsize=10)
 
-    plt.title("MAVLink BIN Log Parsing Benchmark — Time Comparison", fontsize=12, fontweight='bold', pad=15)
-    plt.ylabel("Average Execution Time (Seconds)", fontsize=11, fontweight='bold')
-    plt.xlabel("Concurrency Method", fontsize=11, fontweight='bold')
-    plt.grid(axis='y', linestyle='--', alpha=0.7)
-    
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=300)
-    plt.close()
-    logger.info(f"Successfully updated benchmark chart image at: {output_path}")
+def measure_parse_time(
+    name: str, file_path: Path, parsing_mode: str, num_workers: Optional[int] = None
+) -> BenchmarkResult:
+    """Helper function to measure parsing execution time for custom parser execution modes."""
+    start = time.perf_counter()
+    parser = BinParser(file_path)
+    result = parser.parse_all_messages(parsing_mode=parsing_mode, num_workers=num_workers)
+    count = sum(len(v) for v in result.values())
+    return BenchmarkResult(name, count, time.perf_counter() - start)
 
-def print_comparison_table(all_results: Dict[str, List[BenchmarkResult]]) -> None:
-    baseline_average = None
-    if 'pymavlink (Baseline)' in all_results and all_results['pymavlink (Baseline)']:
-        baseline_runs = all_results['pymavlink (Baseline)']
-        baseline_average = sum(r.elapsed_seconds for r in baseline_runs) / len(baseline_runs)
 
-    print("\n+" + "=" * 116 + "+", flush=True)
-    print(f"|  {'Method':<35} | {'Messages':>12} | {'Min(s)':>8} | {'Avg(s)':>8} | {'Max(s)':>8} | {'Speedup':>9} |", flush=True)
-    print("+" + "-" * 116 + "+", flush=True)
-    
-    for name, results in all_results.items():
-        if not results: 
-            continue
-        times = [r.elapsed_seconds for r in results]
-        avg_t = sum(times) / len(times)
-        avg_c = sum([r.message_count for r in results]) / len(results)
-        speedup = f"{baseline_average / avg_t:.2f}x" if baseline_average and avg_t > 0 else "1.00x"
-        print(f"|  {name:<35} | {int(avg_c):>12,} | {min(times):>8.3f} | {avg_t:>8.3f} | {max(times):>8.3f} | {speedup:>9} |", flush=True)
-    print("+" + "=" * 116 + "+\n", flush=True)
+def print_comparison_table(all_results: Dict[str, BenchmarkResult]) -> None:
+    """Logs a clean ASCII comparison table of all parsing methods."""
+    baseline = all_results.get("pymavlink (Baseline)")
+    baseline_time = baseline.elapsed_seconds if baseline else None
+
+    table_lines = []
+    table_lines.append("+" + "=" * 80 + "+")
+    table_lines.append(f"|  {'Method':<30} | {'Messages':>12} | {'Time (s)':>12} | {'Speedup':>12} |")
+    table_lines.append("+" + "-" * 80 + "+")
+
+    for name, res in all_results.items():
+        speedup = (
+            f"{baseline_time / res.elapsed_seconds:.2f}x" if baseline_time and res.elapsed_seconds > 0 else "1.00x"
+        )
+        table_lines.append(
+            f"|  {name:<30} | {res.message_count:>12,} | {res.elapsed_seconds:>12.3f}s | {speedup:>12} |"
+        )
+    table_lines.append("+" + "=" * 80 + "+")
+
+    logger.info("\n" + "\n".join(table_lines) + "\n")
+
 
 class CompareService:
     def __init__(self, file_path: Path):
         self.file_path = file_path
-        self.parser = BinParserService(file_path)
 
-    def run_comprehensive_benchmark(self, runs: int = 1, num_workers: int = 4) -> Dict[str, List[BenchmarkResult]]:
-        logger.info("Loading entire file into memory once to perform super-fast RAM parsing...")
-        file_size = self.file_path.stat().st_size
-        with self.file_path.open('rb') as f:
-            file_bytes = f.read()
+    def run_comprehensive_benchmark(self, num_workers: Optional[int] = None) -> Dict[str, BenchmarkResult]:
+        if num_workers is None:
+            num_workers = get_optimal_num_workers(self.file_path)
+        logger.info(f"Starting Benchmark (1 Run, {num_workers} Workers)...")
 
-        logger.info("Scanning file offsets once...")
-        offsets = self.parser.scan_message_offsets()
-        
-        logger.info(f"Starting High-Performance Benchmark ({runs} Run, {num_workers} Workers)...")
-        
         methods = {
             "pymavlink (Baseline)": lambda: benchmark_pymavlink(self.file_path),
-            "Sequential (Custom)": lambda: parse_sequential_fast(file_bytes, self.parser),
-            f"ThreadPoolExecutor ({num_workers}w)": lambda: parse_threaded_fast(file_bytes, self.parser, offsets, file_size, num_workers),
-            f"ProcessPoolExecutor ({num_workers}w)": lambda: parse_multiprocess_fast(self.file_path, offsets, file_size, num_workers),
-            f"Asyncio ({num_workers}w)": lambda: parse_async_fast(file_bytes, self.parser, offsets, file_size, num_workers)
+            "Sequential (Custom)": lambda: measure_parse_time("Sequential (Custom)", self.file_path, "simple"),
+            f"ThreadPoolExecutor ({num_workers}w)": lambda: measure_parse_time(
+                f"ThreadPoolExecutor ({num_workers}w)", self.file_path, "threads", num_workers
+            ),
+            f"ProcessPoolExecutor ({num_workers}w)": lambda: measure_parse_time(
+                f"ProcessPoolExecutor ({num_workers}w)", self.file_path, "processes", num_workers
+            ),
+            f"Asyncio ({num_workers}w)": lambda: measure_parse_time(
+                f"Asyncio ({num_workers}w)", self.file_path, "async", num_workers
+            ),
         }
-        
-        all_results = {name: [] for name in methods.keys()}
+
+        all_results: Dict[str, BenchmarkResult] = {}
         for name, func in methods.items():
             logger.info(f"Executing {name}...")
             try:
-                res = func()
-                all_results[name].append(res)
+                all_results[name] = func()
             except Exception as e:
                 logger.error(f"Method {name} failed: {e}", exc_info=True)
 
         print_comparison_table(all_results)
-        generate_and_save_chart(all_results, output_path="benchmark_results.png")
         return all_results
 
-def run_comparison_report(file_path: Path, runs: int = 1, num_workers: int = 4) -> None:
-    service = CompareService(file_path)
-    service.run_comprehensive_benchmark(runs=runs, num_workers=num_workers)
+
+
+def run_comparison_report(file_path: Path, num_workers: Optional[int] = None) -> None:
+    CompareService(file_path).run_comprehensive_benchmark(num_workers=num_workers)
