@@ -1,0 +1,35 @@
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Python cache & compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDE configurations
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+
+# Environment variables & secrets
+.env
+.env.*
+
+# Project specific binary files & logs
+*.bin
+*.log
+logs/
+
+# Test caches
+.pytest_cache/
+.coverage
+htmlcov/
+
+project_explanation.md
