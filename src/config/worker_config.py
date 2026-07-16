@@ -1,9 +1,12 @@
 import os
-import psutil
 from pathlib import Path
+
+import psutil
+
 from src.config.logging_config import get_logger
 
 logger = get_logger(__name__)
+
 
 def get_optimal_num_workers(file_path: Path) -> int:
     """Calculates the optimal number of workers based on physical CPU count and RAM availability."""
@@ -20,11 +23,11 @@ def get_optimal_num_workers(file_path: Path) -> int:
         num_cores = (os.cpu_count() or 2) // 2
 
     try:
-        available_gb = psutil.virtual_memory().available / (1024 ** 3)
+        available_gb = psutil.virtual_memory().available / (1024**3)
     except Exception:
         available_gb = 4.0
 
-    file_size_gb = max(0.01, file_size_bytes / (1024 ** 3))
+    file_size_gb = max(0.01, file_size_bytes / (1024**3))
 
     # Base memory ~0.25GB per worker + small growth by file size
     process_memory_gb = 0.25 + 0.20 * file_size_gb

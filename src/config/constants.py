@@ -15,5 +15,3 @@ BINARY_Z_FIELDS = {("FILE", "Data")}
 
 # Maximum chunk size in bytes processed by a single worker to prevent memory OOM on large files.
 MAX_CHUNK_SIZE_BYTES = 20 * 1024 * 1024
-
-

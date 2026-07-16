@@ -3,10 +3,10 @@ import mmap
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from src.business_logic.format_bank import load_message_formats
 from src.config.constants import MESSAGE_HEADER
 from src.config.logging_config import get_logger
 from src.models.bin_messages import MessageFormat
-from src.business_logic.format_bank import load_message_formats
 
 logger = get_logger(__name__)
 
@@ -87,9 +87,7 @@ def parse_bytes_to_dict(
                             break
                         raw_buffers[fmt.name].extend(mapped[position + 3 : position + 3 + stride])
                     else:
-                        logger.warning(
-                            f"Message format '{fmt.name}' (type_id {type_id}) has no struct object defined"
-                        )
+                        logger.warning(f"Message format '{fmt.name}' (type_id {type_id}) has no struct object defined")
                         position = mapped_find(_MESSAGE_HEADER, position + 1)
                         continue
 
@@ -144,21 +142,21 @@ def parse_bytes_to_dict(
 
 def multiprocessing_byte_worker(args: Tuple[Path, int, int, Optional[Set[str]]]) -> Dict[str, List[Tuple[Any, ...]]]:
     """Multiprocessing entry point for byte range worker with safe boundary alignment."""
-    
+
     file_path, start_offset, end_offset, wanted_names = args
-    
+
     formats = load_message_formats(file_path)
     file_size = file_path.stat().st_size
 
     with file_path.open("rb") as f:
-        with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mapped:         
+        with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mapped:
             # --- 1. Align Start Offset ---
             # If not the first chunk, skip partial message bytes and align to next valid header
             if start_offset > 0:
                 aligned_start = start_offset
                 while aligned_start < file_size:
                     if aligned_start + 2 < file_size and mapped[aligned_start : aligned_start + 2] == MESSAGE_HEADER:
-                        msg_type = mapped[aligned_start+2]
+                        msg_type = mapped[aligned_start + 2]
                         if msg_type in formats:
                             break  # Valid recognized message start found
                     aligned_start += 1
@@ -170,7 +168,7 @@ def multiprocessing_byte_worker(args: Tuple[Path, int, int, Optional[Set[str]]])
             if aligned_end < file_size:
                 while aligned_end < file_size:
                     if aligned_end + 2 < file_size and mapped[aligned_end : aligned_end + 2] == MESSAGE_HEADER:
-                        msg_type = mapped[aligned_end+2]
+                        msg_type = mapped[aligned_end + 2]
                         if msg_type in formats:
                             break  # Start of next chunk's first message found
                     aligned_end += 1

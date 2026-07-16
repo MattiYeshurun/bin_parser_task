@@ -67,7 +67,7 @@ def create_message_format(
         columns=[null_term(c) for c in raw_columns.split(b",") if c.strip()],
     )
     struct_obj, multipliers, string_indices, array_indices = build_struct(fmt_obj.format_string)
-    
+
     # Filter out columns that represent raw binary data (configured in BINARY_Z_FIELDS)
     # so they remain bytes and are not decoded as null-terminated strings.
     for col_idx in list(string_indices):
