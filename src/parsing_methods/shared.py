@@ -40,11 +40,14 @@ def parse_bytes_to_dict(
     format_table: list = [None] * 256
     name_to_fmt: Dict[str, MessageFormat] = {}
     raw_buffers: Dict[str, bytearray] = {}
+    wanted_ids: Optional[Set[int]] = set() if wanted_set is not None else None
     for tid, fmt in formats.items():
         format_table[tid] = fmt
         name_to_fmt[fmt.name] = fmt
         if wanted_set is None or fmt.name in wanted_set:
             raw_buffers[fmt.name] = bytearray()
+            if wanted_ids is not None:
+                wanted_ids.add(tid)
 
     # ── Pre-computation: wanted type IDs for multi-type targeted search ──
     wanted_ids: Optional[Set[int]] = None

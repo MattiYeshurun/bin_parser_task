@@ -50,7 +50,10 @@ class BinParser:
                 num_workers = get_optimal_num_workers(self.file_path)
 
             file_size = self.file_path.stat().st_size
-            chunk_size = min(math.ceil(file_size / num_workers), MAX_CHUNK_SIZE_BYTES)
+            if file_size <= MAX_CHUNK_SIZE_BYTES:
+                chunk_size = file_size
+            else:
+                chunk_size = min(math.ceil(file_size / num_workers), MAX_CHUNK_SIZE_BYTES)
             num_chunks = math.ceil(file_size / chunk_size)
             chunk_args = [
                 (self.file_path, i * chunk_size, min((i + 1) * chunk_size, file_size), wanted_names)

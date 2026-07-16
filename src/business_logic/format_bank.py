@@ -107,7 +107,7 @@ def load_message_formats(file_path: Path) -> Dict[int, MessageFormat]:
                     type_id, length, raw_name, raw_format, raw_columns = FMT_PAYLOAD_STRUCT.unpack(payload)
                     if type_id not in formats:
                         fmt_obj = create_message_format(type_id, length, raw_name, raw_format, raw_columns)
-                        if fmt_obj.name:
+                        if fmt_obj.name and fmt_obj.format_string:
                             formats[type_id] = fmt_obj
                 except struct.error:
                     pass

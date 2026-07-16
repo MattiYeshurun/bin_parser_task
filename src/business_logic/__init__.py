@@ -1,6 +1,4 @@
 """Business logic layer — core parsing logic for BIN files."""
-
-from src.business_logic.ardupilot_bin_parser import BinParser
 from src.business_logic.format_bank import FORMAT_MAP, load_message_formats
 
 __all__ = [
